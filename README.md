@@ -39,5 +39,3 @@ Note that the function here used to determine various parameters assumes an expl
 `chr${chr}_${phenotype}_${label}`
 
 where ${phenotype} is the column name in the output of the call to `random_phenos.R`, and `${label}` is one of AFR, AMR, EAS, EUR, SAS.
-...
-
