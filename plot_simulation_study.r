@@ -1,4 +1,13 @@
 #!/usr/bin/env Rscript
+
+packages <- c('data.table', 'dplyr', 'ggplot2', 'tidyr', 'latex2exp', 'argparse', 'ggrastr')
+
+for (p in packages) {
+    if (!require(p, character.only = TRUE)) {
+        install.packages(p, repos = "http://cran.us.r-project.org")
+    }
+}
+
 library(data.table)
 library(dplyr)
 library(ggplot2)
@@ -8,7 +17,7 @@ library(argparse)
 library(ggrastr)
 
 # mkdir data
-# dx download /Duncan/simulation_study/outputs/step2/* -o data/
+# dx download "/Duncan/simulation_study/outputs/step2/*AMR*" -o data/AMR/
 annotation_names <- list(
     "damaging missense or protein altering" = "damaging_missense_or_protein_altering",
     "non-coding" = "non_coding", 
@@ -126,6 +135,7 @@ main <- function(args)
     # Single variant tests
     dt_variant <- rbindlist(
         lapply(dt_results[test=="variant",]$file, fread_and_prevalence))
+    dt_variant[, p.value := as.numeric(p.value)]
     dt_variant[, Interval := cut(
         MAF,
         breaks=c(0, 0.0001, 0.001, 0.01, 0.1, Inf),
@@ -134,46 +144,49 @@ main <- function(args)
         include.lowest=TRUE)
     ]
 
-    if (is.null(args$single_run)) {
-        # Find the minimum number of variants analysed across the runs
-        dt_variant <- dt_variant %>% 
-            group_by(Interval, prevalence, run) %>% 
-            mutate(count=n()) %>% 
-            group_by(Interval, prevalence) %>% 
-            mutate(min_count = min(count), .groups="drop_last")
-        dt_variant <- dt_variant %>% 
-            group_by(Interval, prevalence, run) %>%
-            reframe(quantile_p = quantile(p.value,
-                        probs=seq(0,1,length.out=(min_count[1]+1)[-(min_count[1]+1)])),
-            ) %>% group_by(Interval, prevalence, run) %>%
-            mutate(order = order(quantile_p))
-        dt_variant <- dt_variant %>% 
-            group_by(Interval, prevalence, order) %>% 
-            summarise(p.value = median(quantile_p), .groups="drop_last") %>% 
-            mutate(p.value.expected = seq(1,n())/n())
-    } else {
-        dt_variant <- dt_variant[order(p.value)] %>% 
-            group_by(Interval, prevalence) %>% 
-            mutate(p.value.expected = seq(1,n())/n(), .groups="drop_last")
-    }
+    if (nrow(dt_variant) > 0) {
+        if (is.null(args$single_run)) {
+            # Find the minimum number of variants analysed across the runs
+            dt_variant <- dt_variant %>% 
+                group_by(Interval, prevalence, run) %>% 
+                mutate(count=n()) %>% 
+                group_by(Interval, prevalence) %>% 
+                mutate(min_count = min(count), .groups="drop_last")
+            dt_variant <- dt_variant %>% 
+                group_by(Interval, prevalence, run) %>%
+                reframe(quantile_p = quantile(p.value,
+                            probs=seq(0,1,length.out=(min_count[1]+1)[-(min_count[1]+1)])),
+                ) %>% group_by(Interval, prevalence, run) %>%
+                mutate(order = order(quantile_p))
+            dt_variant <- dt_variant %>% 
+                group_by(Interval, prevalence, order) %>% 
+                summarise(p.value = median(quantile_p), .groups="drop_last") %>% 
+                mutate(p.value.expected = seq(1,n())/n())
+        } else {
+            dt_variant <- dt_variant[order(p.value)] %>% 
+                group_by(Interval, prevalence) %>% 
+                mutate(p.value.expected = seq(1,n())/n(), .groups="drop_last")
+        }
 
-    cat("Creating variant plots...\n")
-    pdf(file=gsub(".pdf", "_variant.pdf", args$out))
-    p <- ggplot(dt_variant,
-        aes(x=-log10(p.value.expected), y=-log10(p.value), col=Interval)) +
-    rasterise(geom_point(), dpi=500) + geom_abline(intercept=0, slope=1, color='black') + 
-    facet_wrap(~prevalence) + theme_classic() + 
-    xlab(TeX("$-\\log_{10}(P_{observed})$")) +
-    ylab(TeX("$-\\log_{10}(P_{expected})$")) + 
-    labs(title = "Variant based testing") +
-    coord_fixed(ratio = 1)
-    print(p)
-    dev.off()
-    cat("Variant plots created.\n")
+        cat("Creating variant plots...\n")
+        pdf(file=gsub(".pdf", "_variant.pdf", args$out))
+        dt_variant <- dt_variant %>% mutate(p.value = as.numeric(p.value)+1e-300)
+        p <- ggplot(dt_variant,
+            aes(x=-log10(p.value.expected), y=-log10(p.value), col=Interval)) +
+        rasterise(geom_point(), dpi=500) + geom_abline(intercept=0, slope=1, color='black') + 
+        facet_wrap(~prevalence, scales="free") + theme_classic() + 
+        xlab(TeX("$-\\log_{10}(P_{observed})$")) +
+        ylab(TeX("$-\\log_{10}(P_{expected})$")) + 
+        labs(title = "Variant based testing") #+
+        # coord_fixed(ratio = 1)
+        print(p)
+        dev.off()
+        cat("Variant plots created.\n")
+    }
 
     # Group tests
     CAFs_master <- args$CAF_file
-    dt_CAF <- fread(CAFs_master)[super_population == "EUR",]
+    dt_CAF <- fread(CAFs_master)[super_population == args$pop,]
     setkeyv(dt_CAF, c("GENE", "annotation", "MAF_upper"))
     dt_group <- rbindlist(
         lapply(dt_results[test=="group",]$file, fread_and_prevalence))[
@@ -194,7 +207,7 @@ main <- function(args)
                 CAF = sum(CAF),
                 CAC=sum(CAC),
                 n_variants=sum(n_variants), .groups="drop_last"
-                ) %>% mutate(annotation=c, super_population="EUR")
+                ) %>% mutate(annotation=c, super_population=args$pop)
     }
     dt_CAF_to_add <- rbindlist(dt_CAF_to_add)
     dt_CAF <- rbind(dt_CAF, dt_CAF_to_add)
@@ -221,7 +234,7 @@ main <- function(args)
             mutate(min_count = min(count))
         dt_group_split <- dt_group_split %>% 
             group_by(Interval, prevalence, MAF_upper, annotation, test, run) %>%
-            reframe(quantile_p = quantile(p.value,
+            reframe(quantile_p = quantile(as.numeric(p.value),
                 probs=seq(0,1,length.out=(min_count[1]+1)[-(min_count[1]+1)]))) %>%
             group_by(Interval, prevalence, MAF_upper, annotation, test, run) %>%
             mutate(order = order(quantile_p))
@@ -231,7 +244,7 @@ main <- function(args)
             mutate(p.value.expected = seq(1,n())/n())
         dt_group_split <- data.table(dt_group_split)
     } else {
-        dt_group_split <- dt_group[order(p.value)] %>% 
+        dt_group_split <- dt_group[order(as.numeric(p.value))] %>% 
         group_by(Interval, prevalence, MAF_upper, annotation, test) %>% 
         mutate(p.value.expected = seq(1,n())/n(), .groups="drop_last")
         dt_group_split <- data.table(dt_group_split)
@@ -246,7 +259,7 @@ main <- function(args)
             mutate(min_count = min(count))
         dt_group <- dt_group %>% 
             group_by(Interval, prevalence, MAF_upper, test, run) %>%
-            reframe(quantile_p = quantile(p.value,
+            reframe(quantile_p = quantile(as.numeric(p.value),
                 probs=seq(0,1,length.out=(min_count[1]+1)[-(min_count[1]+1)]))) %>%
             group_by(Interval, prevalence, MAF_upper, test, run) %>%
             mutate(order = order(quantile_p))
@@ -256,7 +269,7 @@ main <- function(args)
             mutate(p.value.expected = seq(1,n())/n())
         dt_group <- data.table(dt_group)
     } else {
-        dt_group <- dt_group[order(p.value)] %>% 
+        dt_group <- dt_group[order(as.numeric(p.value))] %>% 
             group_by(Interval, prevalence, MAF_upper, test) %>% 
             mutate(p.value.expected = seq(1,n())/n(), .groups="drop_last")
         dt_group <- data.table(dt_group)
@@ -275,14 +288,14 @@ main <- function(args)
                 ) +
             rasterise(geom_point(), dpi=500) + 
             geom_abline(intercept=0, slope=1, color='black') + 
-            facet_grid(prevalence~MAF_upper) + 
+            facet_grid(prevalence~MAF_upper, scales="free") + 
             geom_abline(intercept=0, slope=1, color='black') + 
             theme_classic() +
             xlab(TeX("$-\\log_{10}(P_{observed})$")) +
             ylab(TeX("$-\\log_{10}(P_{expected})$")) + 
             labs(title = "Gene based testing",
-                subtitle = paste0(t, ", ", ann)) +
-            coord_fixed(ratio = 1)
+                subtitle = paste0(t, ", ", ann)) #+
+            # coord_fixed(ratio = 1)
             print(p)
         }
     }
@@ -293,14 +306,14 @@ main <- function(args)
         p <- ggplot(dt_group[MAF_upper==max_MAF],
             aes(x=-log10(p.value.expected), y=-log10(p.value), col=Interval)) +
         rasterise(geom_point(), dpi=500) + geom_abline(intercept=0, slope=1, color='black') + 
-        facet_grid(prevalence~test) + 
+        facet_grid(prevalence~test, scales="free") + 
         geom_abline(intercept=0, slope=1, color='black') + 
         theme_classic() +
         xlab(TeX("$-\\log_{10}(P_{observed})$")) +
         ylab(TeX("$-\\log_{10}(P_{expected})$")) +
         labs(title = "Gene based testing",
-            subtitle = paste("max MAF:", max_MAF)) +
-        coord_fixed(ratio = 1)
+            subtitle = paste("max MAF:", max_MAF)) #+
+        # coord_fixed(ratio = 1)
         print(p)
     }
     dev.off()
@@ -321,10 +334,16 @@ parser$add_argument("--out", default="simulation_plots.pdf", required=FALSE,
     help="Output filepath")
 parser$add_argument("--single_run", default=NULL, required=FALSE,
     help=paste0("Pass an integer for the required run to plot"))
+parser$add_argument("--pop", default="EUR", required=FALSE,
+    help=paste0("Population label used for combined allele frequency binning"))
 args <- parser$parse_args()
 
 main(args)
 
 # To generate all of the plots, run
 # Rscript plot_simulation_study.r
-# Rscript plot_simulation_study.r --directory data_no_covariates --out simulation_plots_no_covariates.pdf
+# Rscript plot_simulation_study.r --directory data/AFR --out simulation_plots_no_covariates_AFR.pdf --pop AFR --single_run 1
+Rscript plot_simulation_study.r --directory data/AMR --out simulation_plots_no_covariates_AMR.pdf --pop AMR --single_run 1
+# Rscript plot_simulation_study.r --directory data/EAS --out simulation_plots_no_covariates_EAS.pdf --pop EAS --single_run 1
+# Rscript plot_simulation_study.r --directory data/EUR --out simulation_plots_no_covariates_EUR.pdf --pop EUR --single_run 1
+# Rscript plot_simulation_study.r --directory data/SAS --out simulation_plots_no_covariates_SAS.pdf --pop SAS --single_run 1

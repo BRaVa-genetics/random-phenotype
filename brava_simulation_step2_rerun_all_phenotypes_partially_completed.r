@@ -1,31 +1,29 @@
 #!/usr/bin/env Rscript
 
-system("dx build -f ~/Repositories/universal-saige-dnanexus/saige-universal-step-2")
+# Required packages
+packages <- c('data.table', 'dplyr')
 
-include_fixed_effect_covariates_in_fit <- FALSE
-if (include_fixed_effect_covariates_in_fit) {
-    model_file_location <-"/Duncan/simulation_study/outputs/step1/"
-    destination <- "/Duncan/simulation_study/outputs/step2/"
-} else {
-    model_file_location <- "/Duncan/simulation_study/outputs/step1_no_covariates/"
-    destination <- "/Duncan/simulation_study/outputs/step2_no_covariates/"
+for (p in packages) {
+    if (!require(p, character.only = TRUE)) {
+        install.packages(p, repos = "http://cran.us.r-project.org")
+    }
 }
 
+system("dx build -f ~/Repositories/universal-saige-dnanexus/saige-universal-step-2")
+
 create_step2_sim_cmd <- function(
-    chr, phenotype,
+    chr, phenotype, pop,
+    GRM, GRM_samples,
     test_type="group",
     model_file_location="/Duncan/simulation_study/outputs/step1/",
     group_file="/brava/inputs/annotations/v7/ukb_wes_450k.july.qced.brava_common_rare.v7.chr@.saige.txt.gz",
     exome_file="/Barney/wes/sample_filtered/ukb_wes_450k.qced.chr@",
-    GRM="/brava/inputs/GRM/brava_relatednessCutoff_0.05_5000_randomMarkersUsed.sparseGRM.mtx",
-    GRM_samples="/brava/inputs/GRM/brava_relatednessCutoff_0.05_5000_randomMarkersUsed.sparseGRM.mtx.sampleIDs.txt",
     instance_type="mem3_ssd1_v2_x8", priority="low",
     destination="/Duncan/simulation_study/outputs/step2/",
     annotations="pLoF,damaging_missense_or_protein_altering,other_missense_or_protein_altering,synonymous,pLoF:damaging_missense_or_protein_altering,pLoF:damaging_missense_or_protein_altering:other_missense_or_protein_altering:synonymous",
     split=NULL
     ) {
 
-    pop <- "EUR"
     if (is.null(split)) {
         output_prefix <- paste0("out/chr", chr, "_", phenotype, "_", pop)
         name <- paste(chr, phenotype, pop, sep="_")
@@ -67,17 +65,17 @@ create_step2_sim_cmd <- function(
     return(cmd)
 }
 
-# Required packages
-packages <- c('data.table', 'dplyr')
-
-for (p in packages) {
-    if (!require(p, character.only = TRUE)) {
-        install.packages(p, repos = "http://cran.us.r-project.org")
-    }
+include_fixed_effect_covariates_in_fit <- TRUE
+include_fixed_effect_covariates_in_fit <- FALSE
+if (include_fixed_effect_covariates_in_fit) {
+    model_file_location <-"/Duncan/simulation_study/outputs/step1/"
+    destination <- "/Duncan/simulation_study/outputs/step2/"
+} else {
+    model_file_location <- "/Duncan/simulation_study/outputs/step1_no_covariates/"
+    destination <- "/Duncan/simulation_study/outputs/step2_no_covariates/"
 }
 
-RAP_outputs_folder <- destination
-outputs <- system(paste("dx ls", RAP_outputs_folder), intern=TRUE)
+outputs <- system(paste("dx ls", destination), intern=TRUE)
 outputs <- outputs[-grep("singleAssoc.txt.gz", outputs)]
 # Ensure reruns are not counted as distinct
 outputs <- unique(gsub(" : file-.*", "", outputs))
@@ -102,6 +100,7 @@ for (chr in seq(2,22)) {
 }
 
 dt_rerun <- setdiff(dt_check, dt)
+dt_rerun <- dt_rerun %>% filter(!grepl("_0.001$", phenotype))
 
 if (rerun_high_priority) {
 	priority_rerun <- "high"
@@ -110,10 +109,16 @@ if (rerun_high_priority) {
 }
 
 # Run them all by extracting from the relevant entries of this data.table
-for (row in 1:nrow(dt_rerun)) {
+for (row in 1:nrow(dt_rerun))
+{
+    grm <- paste0("/brava/outputs/step0/brava_", dt_rerun$pop[row],
+        "_relatednessCutoff_0.05_5000_randomMarkersUsed.sparseGRM.mtx")
+    grm_samples <- paste0("/brava/outputs/step0/brava_", dt_rerun$pop[row],
+        "_relatednessCutoff_0.05_5000_randomMarkersUsed.sparseGRM.mtx.sampleIDs.txt")
 	cmd <- create_step2_sim_cmd(
 		chr=gsub("chr", "", dt_rerun$chr[row]),
 		phenotype=paste(dt_rerun$phenotype[row], dt_rerun$replicate[row], sep="_"),
+        pop=dt_rerun$pop[row], GRM=grm, GRM_samples=grm_samples,
         destination=destination,
         model_file_location=model_file_location,
 		priority=priority_rerun

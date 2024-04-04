@@ -1,31 +1,29 @@
 #!/usr/bin/env Rscript
 
-system("dx build -f ~/Repositories/universal-saige-dnanexus/saige-universal-step-2")
+# Required packages
+packages <- c('data.table')
 
-include_fixed_effect_covariates_in_fit <- FALSE
-if (include_fixed_effect_covariates_in_fit) {
-    model_file_location <-"/Duncan/simulation_study/outputs/step1/"
-    destination <- "/Duncan/simulation_study/outputs/step2/"
-} else {
-    model_file_location <- "/Duncan/simulation_study/outputs/step1_no_covariates/"
-    destination <- "/Duncan/simulation_study/outputs/step2_no_covariates/"
+for (p in packages) {
+    if (!require(p, character.only = TRUE)) {
+        install.packages(p, repos = "http://cran.us.r-project.org")
+    }
 }
 
+system("dx build -f ~/Repositories/universal-saige-dnanexus/saige-universal-step-2")
+
 create_step2_sim_cmd <- function(
-    chr, phenotype,
+    chr, phenotype, pop,
+    GRM, GRM_samples,
     test_type="group",
     model_file_location="/Duncan/simulation_study/outputs/step1/",
     group_file="/brava/inputs/annotations/v7/ukb_wes_450k.july.qced.brava_common_rare.v7.chr@.saige.txt.gz",
     exome_file="/Barney/wes/sample_filtered/ukb_wes_450k.qced.chr@",
-    GRM="/brava/inputs/GRM/brava_relatednessCutoff_0.05_5000_randomMarkersUsed.sparseGRM.mtx",
-    GRM_samples="/brava/inputs/GRM/brava_relatednessCutoff_0.05_5000_randomMarkersUsed.sparseGRM.mtx.sampleIDs.txt",
     instance_type="mem3_ssd1_v2_x8", priority="low",
     destination="/Duncan/simulation_study/outputs/step2/",
     annotations="pLoF,damaging_missense_or_protein_altering,other_missense_or_protein_altering,synonymous,pLoF:damaging_missense_or_protein_altering,pLoF:damaging_missense_or_protein_altering:other_missense_or_protein_altering:synonymous",
     split=NULL
     ) {
 
-    pop <- "EUR"
     if (is.null(split)) {
         output_prefix <- paste0("out/chr", chr, "_", phenotype, "_", pop)
         name <- paste(chr, phenotype, pop, sep="_")
@@ -67,35 +65,41 @@ create_step2_sim_cmd <- function(
     return(cmd)
 }
 
-# Required packages
-packages <- c('data.table')
-
-for (p in packages) {
-    if (!require(p, character.only = TRUE)) {
-        install.packages(p, repos = "http://cran.us.r-project.org")
-    }
+include_fixed_effect_covariates_in_fit <- TRUE
+if (include_fixed_effect_covariates_in_fit) {
+    model_file_location <-"/Duncan/simulation_study/outputs/step1/"
+    destination <- "/Duncan/simulation_study/outputs/step2/"
+} else {
+    model_file_location <- "/Duncan/simulation_study/outputs/step1_no_covariates/"
+    destination <- "/Duncan/simulation_study/outputs/step2_no_covariates/"
 }
 
 # Ensure that the phenotype files locally and on the RAP match
 # system("dx upload random_phenos_EUR_including_covariates.tsv.gz --path /Duncan/simulation_study/")
+for (pop in c("AFR", "AMR", "EAS", "SAS"))
+{
+    dt <- fread(paste0("random_phenos_", pop, "_including_covariates.tsv.gz"))
+    covariates <- c("age", "age2", "age_sex", "age2_sex", "sex", paste0("PC", seq(1,10)))
+    phenos <- setdiff(names(dt), c("IID", covariates))
+    outputs <- system(paste("dx ls", destination), intern=TRUE)
+    outputs <- outputs[-grep("singleAssoc.txt.gz", outputs)]
 
-dt <- fread("random_phenos_EUR_including_covariates.tsv.gz")
-covariates <- c("age", "age2", "age_sex", "age2_sex", "sex", paste0("PC", seq(1,10)))
-phenos <- setdiff(names(dt), c("IID", covariates))
+    grm <- paste0("/brava/outputs/step0/brava_", pop,
+        "_relatednessCutoff_0.05_5000_randomMarkersUsed.sparseGRM.mtx")
+    grm_samples <- paste0("/brava/outputs/step0/brava_", pop,
+        "_relatednessCutoff_0.05_5000_randomMarkersUsed.sparseGRM.mtx.sampleIDs.txt")
 
-RAP_outputs_folder <- destination
-outputs <- system(paste("dx ls", RAP_outputs_folder), intern=TRUE)
-outputs <- outputs[-grep("singleAssoc.txt.gz", outputs)]
-
-for (pheno in phenos) {
-    for (chr in c(seq(2,22), "X")) {
-        if (!any(grepl(paste0("chr", chr, "_", pheno, "_EUR"), outputs))) {
-            cmd <- create_step2_sim_cmd(
-                chr=chr, phenotype=pheno,
-                destination=destination,
-                model_file_location=model_file_location)
-            print(cmd)
-            system(cmd)
+    for (pheno in phenos) {
+        for (chr in c(seq(2,22), "X")) {
+            if (!any(grepl(paste0("chr", chr, "_", pheno, "_", pop), outputs))) {
+                cmd <- create_step2_sim_cmd(
+                    chr=chr, phenotype=pheno,
+                    pop=pop, GRM=grm, GRM_samples=grm_samples,
+                    destination=destination,
+                    model_file_location=model_file_location)
+                print(cmd)
+                system(cmd)
+            }
         }
     }
 }
